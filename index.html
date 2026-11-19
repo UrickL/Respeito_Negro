@@ -485,9 +485,18 @@ Encontre os seis pares!
 <div class="phase-head">
 <div class="tag">ETAPA 2 DE 4</div>
 <h2>O caminho do respeito</h2>
-<p>Arraste a palavra RESPEITO pelo labirinto até a estrela. Utilize o mouse, touchpad ou toque na tela.</p>
+<p>Use o dedo indicador diante da câmera para conduzir a palavra RESPEITO até a estrela. Se preferir, você também pode arrastá-la com o mouse ou tocar na tela.</p>
 </div>
 
+<div class="hand-controls" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:15px 0">
+    <button id="startCamera">Ativar câmera e jogar com as mãos</button>
+    <button id="stopCamera" class="secondary" disabled>Desligar câmera</button>
+    <span id="handStatus" class="feedback" style="margin:0;flex:1;min-width:220px">Câmera desligada. Ative para controlar com o dedo indicador.</span>
+</div>
+<div style="display:flex;gap:15px;align-items:flex-start;flex-wrap:wrap;margin-bottom:15px">
+    <video id="handVideo" playsinline muted style="width:190px;max-width:42vw;border-radius:12px;background:#080605;transform:scaleX(-1);display:none"></video>
+    <p style="color:var(--muted);font-size:.85rem;max-width:440px;margin:0">Dica: mantenha a mão visível e mova a ponta do dedo indicador. A câmera precisa de permissão e o site deve estar em HTTPS (ou localhost).</p>
+</div>
 <div class="maze">
 <div class="maze-track" id="mazeTrack">
 
@@ -595,6 +604,9 @@ Dica: dia 20 do mês 11.
 <footer>
 Material educativo para reflexão e diálogo sobre respeito, diversidade e enfrentamento ao racismo.
 </footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 
 <script>
 
@@ -829,7 +841,111 @@ window.addEventListener('pointerup',()=>{
     dragging=false;
 });
 
-document.getElementById('mazeContinue').onclick=()=>goNext(2);
+// CONTROLE DO LABIRINTO COM MEDIAPIPE HANDS
+const handVideo=document.getElementById('handVideo');
+const startCameraButton=document.getElementById('startCamera');
+const stopCameraButton=document.getElementById('stopCamera');
+const handStatus=document.getElementById('handStatus');
+let handsCamera=null;
+let handsModel=null;
+let cameraActive=false;
+let lastHandX=null;
+let lastHandY=null;
+
+function updateHandStatus(message, good=false) {
+    handStatus.textContent=message;
+    handStatus.className=good?'feedback good':'feedback';
+}
+
+async function startHandsCamera() {
+    if (cameraActive) return;
+    if (!window.Hands || !window.Camera) {
+        updateHandStatus('Não foi possível carregar o MediaPipe. Verifique sua conexão com a internet e recarregue a página.');
+        return;
+    }
+    try {
+        updateHandStatus('Solicitando acesso à câmera...');
+        handVideo.style.display='block';
+        handsModel=new Hands({
+            locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+        handsModel.setOptions({
+            maxNumHands:1,
+            modelComplexity:1,
+            minDetectionConfidence:0.65,
+            minTrackingConfidence:0.60
+        });
+        handsModel.onResults((results)=>{
+            if (!cameraActive) return;
+            const hand=results.multiHandLandmarks && results.multiHandLandmarks[0];
+            if (!hand) {
+                lastHandX=null;
+                lastHandY=null;
+                updateHandStatus('Mão não detectada. Mostre a mão inteira para a câmera.');
+                return;
+            }
+            // Ponta do indicador (landmark 8), com imagem espelhada.
+            const tip=hand[8];
+            const targetX=(1-tip.x)*track.clientWidth-token.offsetWidth/2;
+            const targetY=tip.y*track.clientHeight-token.offsetHeight/2;
+            // Suavização para reduzir tremores do rastreamento.
+            const smoothX=lastHandX===null?targetX:lastHandX*0.65+targetX*0.35;
+            const smoothY=lastHandY===null?targetY:lastHandY*0.65+targetY*0.35;
+            lastHandX=smoothX;
+            lastHandY=smoothY;
+            setToken(smoothX,smoothY);
+            updateHandStatus('Mão detectada! Movimente o dedo indicador para guiar RESPEITO.',true);
+        });
+        handsCamera=new Camera(handVideo,{
+            onFrame:async()=>{
+                if (cameraActive && handsModel) await handsModel.send({image:handVideo});
+            },
+            width:640,
+            height:480
+        });
+        cameraActive=true;
+        await handsCamera.start();
+        startCameraButton.disabled=true;
+        stopCameraButton.disabled=false;
+        updateHandStatus('Câmera ativa. Aponte o dedo indicador para controlar a palavra!',true);
+    } catch(error) {
+        cameraActive=false;
+        handVideo.style.display='none';
+        updateHandStatus('Não foi possível iniciar a câmera. Permita o acesso nas configurações do navegador e tente novamente.');
+        console.error('Erro ao iniciar MediaPipe Hands:',error);
+        if (handsCamera && handsCamera.stop) handsCamera.stop();
+        handsCamera=null;
+        if (handsModel && handsModel.close) await handsModel.close();
+        handsModel=null;
+    }
+}
+
+async function stopHandsCamera() {
+    cameraActive=false;
+    lastHandX=null;
+    lastHandY=null;
+    if (handsCamera && handsCamera.stop) handsCamera.stop();
+    handsCamera=null;
+    if (handsModel && handsModel.close) await handsModel.close();
+    handsModel=null;
+    if (handVideo.srcObject) {
+        handVideo.srcObject.getTracks().forEach(track=>track.stop());
+        handVideo.srcObject=null;
+    }
+    handVideo.style.display='none';
+    startCameraButton.disabled=false;
+    stopCameraButton.disabled=true;
+    updateHandStatus('Câmera desligada. Você pode continuar usando mouse ou toque.');
+}
+
+startCameraButton.addEventListener('click',startHandsCamera);
+stopCameraButton.addEventListener('click',stopHandsCamera);
+
+// Encerra a câmera ao avançar para a próxima etapa.
+document.getElementById('mazeContinue').onclick=async()=>{
+    await stopHandsCamera();
+    goNext(2);
+};
 
 // CRUZADINHA
 
